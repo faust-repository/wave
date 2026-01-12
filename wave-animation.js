@@ -5,28 +5,32 @@
 
   const cfg = {
     stroke: "#ff3b1a",
-    lineWidth: 1.15,
+    lineWidth: 1.2,
     stepPx: 2,
 
-    // TODAS las ondas comparten el mismo carril (para cruzarse)
-    centerY: 0.52,         // 0..1
-    // micro separación (muy pequeña) para que no se vean siempre “encima”
-    microOffsetPx: 10,     // px
+    centerY: 0.52,         // carril central (0..1)
+    microOffsetPx: 8,      // separación mínima entre líneas
 
-    // Frecuencia base compartida: esto hace que se reencuentren y se crucen
-    baseFreq: 1.15,        // ondas a lo ancho aprox (sube si quieres más cruces)
-    baseSpeed: 0.60,       // velocidad general
+    // Cruces (misma frecuencia base)
+    baseFreq: 0.95,        // más bajo => ondas MÁS abiertas
+    baseSpeed: 0.62,
 
-    // “Respiración” (amplitud que crece y decrece)
-    breatheSpeed: 0.45,    // velocidad de respiración
-    breatheAmount: 0.35,   // 0..1 cuánto cambia la amplitud
+    // Respiración global (crecen/decrecen en el tiempo)
+    breatheSpeed: 0.55,
+    breatheAmount: 0.85,   // MUY pronunciado (0..1+)
+
+    // Envolvente a lo largo del ancho (x):
+    // hace que “a medida que avanzan” se encojan y se hagan grandes
+    envelopeTravelSpeed: 0.22, // velocidad con la que viaja la envolvente
+    envelopeSharpness: 2.0,    // más alto => cambios más marcados
+    envelopeMin: 0.25,         // amplitud mínima relativa
+    envelopeMax: 1.55          // amplitud máxima relativa
   };
 
-  // 3 líneas: misma base, distintos phase/speedMul/ampBase
   const lines = [
-    { ampBase: 0.085, phase: 0.0,  speedMul: 1.00, alpha: 0.95, mo: -1 },
-    { ampBase: 0.060, phase: 2.10, speedMul: 0.82, alpha: 0.85, mo:  0 },
-    { ampBase: 0.095, phase: 4.15, speedMul: 0.65, alpha: 0.75, mo:  1 },
+    { ampBase: 0.16, phase: 0.0,  speedMul: 1.00, alpha: 0.95, mo: -1 },
+    { ampBase: 0.12, phase: 2.1,  speedMul: 0.82, alpha: 0.85, mo:  0 },
+    { ampBase: 0.18, phase: 4.15, speedMul: 0.65, alpha: 0.75, mo:  1 },
   ];
 
   let t0 = performance.now();
@@ -39,38 +43,51 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  // Envolvente suave que viaja por X: devuelve factor [envelopeMin..envelopeMax]
+  function envelope(xNorm, t, phase) {
+    // xNorm: 0..1
+    // onda lenta que “se mueve” horizontalmente
+    const v = Math.sin((xNorm * Math.PI * 2) - t * cfg.envelopeTravelSpeed + phase * 0.5);
+    // “hacerla más marcada” sin perder suavidad
+    const shaped = Math.sign(v) * Math.pow(Math.abs(v), 1 / cfg.envelopeSharpness);
+    // map a rango deseado
+    const m = (shaped * 0.5 + 0.5); // 0..1
+    return cfg.envelopeMin + m * (cfg.envelopeMax - cfg.envelopeMin);
+  }
+
   function drawOne(line, t, w, h) {
     const yBase = h * cfg.centerY + line.mo * cfg.microOffsetPx;
 
-    // Amplitud base en px
+    // amplitud base en px (grande)
     const A0 = h * line.ampBase;
 
-    // Amplitud que “respira” (crece/decrece)
+    // respiración temporal (muy visible)
     const breathe = 1 + Math.sin(t * cfg.breatheSpeed + line.phase) * cfg.breatheAmount;
-    const A = A0 * breathe;
 
-    // k = radianes por pixel (misma freq para todos => cruces)
+    // frecuencia base compartida => se cruzan
     const k = (Math.PI * 2 * cfg.baseFreq) / w;
-
-    // velocidad individual
     const speed = cfg.baseSpeed * line.speedMul;
 
-    // modulación adicional para más organicidad (sin romper el cruce)
-    const k2 = k * 0.55;
-    const k3 = k * 0.22;
+    // secundarios para organicidad (pero sin romper el look)
+    const k2 = k * 0.52;
+    const k3 = k * 0.18;
 
     ctx.globalAlpha = line.alpha;
     ctx.beginPath();
 
     for (let x = -30; x <= w + 30; x += cfg.stepPx) {
-      // Onda principal (compartida)
-      const s1 = Math.sin(x * k + t * speed + line.phase);
+      const xNorm = (x + 30) / (w + 60); // 0..1 aprox
 
-      // “curvatura” secundaria (hace que sea menos matemática)
-      const s2 = Math.sin(x * k2 - t * speed * 0.65 + line.phase * 0.7) * 0.22;
+      // envolvente por X (lo que pediste: al avanzar se encoge y crece)
+      const env = envelope(xNorm, t, line.phase);
 
-      // micro drift (muy suave)
-      const s3 = Math.sin(x * k3 + t * speed * 0.35 + 1.3) * 0.10;
+      // amplitud final
+      const A = A0 * breathe * env;
+
+      // ondas (suaves)
+      const s1 = Math.sin(x * k  + t * speed + line.phase);
+      const s2 = Math.sin(x * k2 - t * speed * 0.62 + line.phase * 0.7) * 0.22;
+      const s3 = Math.sin(x * k3 + t * speed * 0.30 + 1.3) * 0.10;
 
       const y = yBase + (s1 + s2 + s3) * A;
 
@@ -94,7 +111,6 @@
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // Orden: pinta “una encima de otra”
     drawOne(lines[0], t, w, h);
     drawOne(lines[1], t, w, h);
     drawOne(lines[2], t, w, h);
