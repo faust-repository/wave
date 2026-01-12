@@ -5,21 +5,28 @@
 
   const cfg = {
     stroke: "#ff3b1a",
-    lineWidth: 1.15,     // mismo grosor en todas
+    lineWidth: 1.15,
     stepPx: 2,
-    // zona donde viven las ondas (en la imagen es una franja, aquí lo centramos)
-    bandCenter: 0.50,    // 0..1
-    bandSpread: 0.12,    // separacion vertical entre lineas (0..1)
-    // frecuencia base compartida -> hace que se crucen entre sí
-    baseFreq: 1.35,      // “cuántas ondas” a lo ancho aprox
-    baseSpeed: 0.55      // velocidad base
+
+    // TODAS las ondas comparten el mismo carril (para cruzarse)
+    centerY: 0.52,         // 0..1
+    // micro separación (muy pequeña) para que no se vean siempre “encima”
+    microOffsetPx: 10,     // px
+
+    // Frecuencia base compartida: esto hace que se reencuentren y se crucen
+    baseFreq: 1.15,        // ondas a lo ancho aprox (sube si quieres más cruces)
+    baseSpeed: 0.60,       // velocidad general
+
+    // “Respiración” (amplitud que crece y decrece)
+    breatheSpeed: 0.45,    // velocidad de respiración
+    breatheAmount: 0.35,   // 0..1 cuánto cambia la amplitud
   };
 
-  // 3 líneas: MISMO freq base, distinta fase/amplitud/speedMultiplier
+  // 3 líneas: misma base, distintos phase/speedMul/ampBase
   const lines = [
-    { offset: -1, amp: 0.070, phase: 0.0,  speedMul: 1.00, alpha: 0.95 },
-    { offset:  0, amp: 0.050, phase: 2.15, speedMul: 0.78, alpha: 0.85 },
-    { offset:  1, amp: 0.085, phase: 4.10, speedMul: 0.62, alpha: 0.75 }
+    { ampBase: 0.085, phase: 0.0,  speedMul: 1.00, alpha: 0.95, mo: -1 },
+    { ampBase: 0.060, phase: 2.10, speedMul: 0.82, alpha: 0.85, mo:  0 },
+    { ampBase: 0.095, phase: 4.15, speedMul: 0.65, alpha: 0.75, mo:  1 },
   ];
 
   let t0 = performance.now();
@@ -33,29 +40,39 @@
   }
 
   function drawOne(line, t, w, h) {
-    // y base por línea (todas en una franja como tu imagen)
-    const mid = h * cfg.bandCenter;
-    const y0 = mid + (line.offset * h * cfg.bandSpread);
+    const yBase = h * cfg.centerY + line.mo * cfg.microOffsetPx;
 
-    const A = h * line.amp;
-    const k = (Math.PI * 2 * cfg.baseFreq) / w; // freq compartida => cruces
+    // Amplitud base en px
+    const A0 = h * line.ampBase;
+
+    // Amplitud que “respira” (crece/decrece)
+    const breathe = 1 + Math.sin(t * cfg.breatheSpeed + line.phase) * cfg.breatheAmount;
+    const A = A0 * breathe;
+
+    // k = radianes por pixel (misma freq para todos => cruces)
+    const k = (Math.PI * 2 * cfg.baseFreq) / w;
+
+    // velocidad individual
     const speed = cfg.baseSpeed * line.speedMul;
 
-    // “respiración” muy sutil para que se note movimiento orgánico
-    const breath = 1 + 0.10 * Math.sin(t * 0.55 + line.phase);
-    const A2 = A * breath;
+    // modulación adicional para más organicidad (sin romper el cruce)
+    const k2 = k * 0.55;
+    const k3 = k * 0.22;
 
     ctx.globalAlpha = line.alpha;
     ctx.beginPath();
 
     for (let x = -30; x <= w + 30; x += cfg.stepPx) {
-      // onda principal (misma freq para todos)
+      // Onda principal (compartida)
       const s1 = Math.sin(x * k + t * speed + line.phase);
 
-      // pequeña modulación secundaria (para que no sea matemático perfecto)
-      const s2 = Math.sin(x * (k * 0.45) - t * (speed * 0.65) + line.phase * 0.7);
+      // “curvatura” secundaria (hace que sea menos matemática)
+      const s2 = Math.sin(x * k2 - t * speed * 0.65 + line.phase * 0.7) * 0.22;
 
-      const y = y0 + s1 * A2 + s2 * (A2 * 0.18);
+      // micro drift (muy suave)
+      const s3 = Math.sin(x * k3 + t * speed * 0.35 + 1.3) * 0.10;
+
+      const y = yBase + (s1 + s2 + s3) * A;
 
       if (x === -30) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
@@ -77,7 +94,7 @@
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // orden: así se superponen como en la imagen (una encima de otra)
+    // Orden: pinta “una encima de otra”
     drawOne(lines[0], t, w, h);
     drawOne(lines[1], t, w, h);
     drawOne(lines[2], t, w, h);
