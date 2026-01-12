@@ -4,53 +4,56 @@
     console.error("[Waves] canvas #waves not found");
     return;
   }
-
   const ctx = canvas.getContext("2d");
 
-  // ----- Settings -----
+  // ====== CONFIG ======
   const cfg = {
-    height: 220,          // debe coincidir con tu CSS (o lo calcula por rect)
-    lineWidth: 1.2,
-    // color naranja limpio (ajústalo si quieres)
     stroke: "#ff3b1a",
-    // movimiento
-    speed: 0.55,          // velocidad general
-    // composición
-    baseY: 0.52,          // altura central (0..1)
-    // ondas: amplitud, frecuencia, offset
-    waves: [
-      { amp: 0.18, freq: 1.05, phase: 0.0, alpha: 1.0 },
-      { amp: 0.12, freq: 0.85, phase: 1.7, alpha: 0.85 },
-      { amp: 0.09, freq: 1.35, phase: 3.2, alpha: 0.65 }
+    lineWidth: 1.2,
+    // altura base de las 3 líneas (0..1 del canvas)
+    lines: [
+      // Cada línea: y, amplitud, frecuencia, velocidad, fase, alpha
+      { y: 0.45, amp: 0.035, freq: 1.15, speed: 0.65, phase: 0.0, alpha: 1.0 },
+      { y: 0.52, amp: 0.055, freq: 0.85, speed: 0.45, phase: 1.8, alpha: 0.75 },
+      { y: 0.60, amp: 0.085, freq: 0.62, speed: 0.30, phase: 3.1, alpha: 0.55 }
     ],
-    // “suavidad” del trazo (resolución)
-    step: 2
+    // suavidad: menor = más puntos = más suave pero más CPU
+    stepPx: 2,
+    // extra “organic” (muy sutil)
+    drift: 0.15
   };
 
-  let rafId = null;
   let t0 = performance.now();
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
     canvas.width = Math.max(1, Math.floor(rect.width * dpr));
     canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function drawWave(w, time, width, height) {
-    const midY = height * cfg.baseY;
-    const amp = height * w.amp;
-    const k = (Math.PI * 2 * w.freq) / width; // frecuencia por px
+  function drawLine(line, time, w, h) {
+    const baseY = h * line.y;
+    const amp = h * line.amp;
 
-    ctx.globalAlpha = w.alpha;
+    // freq: cuántas ondas caben en el ancho (aprox)
+    // Convertimos a “k” (radianes por pixel)
+    const k = (Math.PI * 2 * line.freq) / w;
+
+    ctx.globalAlpha = line.alpha;
     ctx.beginPath();
 
-    // empieza un pelín fuera para que no se note el corte
-    for (let x = -20; x <= width + 20; x += cfg.step) {
-      const y = midY + Math.sin(x * k + time + w.phase) * amp;
+    // leve drift para que no sea matemático perfecto
+    const drift = Math.sin(time * 0.7 + line.phase) * (cfg.drift * amp);
+
+    for (let x = -20; x <= w + 20; x += cfg.stepPx) {
+      const y =
+        baseY +
+        Math.sin(x * k + time * line.speed + line.phase) * amp +
+        Math.sin(x * (k * 0.35) + time * (line.speed * 0.6)) * (amp * 0.18) +
+        drift;
+
       if (x === -20) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -60,34 +63,28 @@
 
   function frame(now) {
     const rect = canvas.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
+    const w = rect.width;
+    const h = rect.height;
 
-    // si el canvas es “0x0” (por display none), no pintes
-    if (width < 2 || height < 2) {
-      rafId = requestAnimationFrame(frame);
+    if (w < 2 || h < 2) {
+      requestAnimationFrame(frame);
       return;
     }
 
-    const time = ((now - t0) / 1000) * cfg.speed;
+    const t = (now - t0) / 1000;
 
-    // limpiar (transparente: no pinta fondo)
-    ctx.clearRect(0, 0, width, height);
-
-    ctx.lineWidth = cfg.lineWidth;
+    ctx.clearRect(0, 0, w, h);
     ctx.strokeStyle = cfg.stroke;
+    ctx.lineWidth = cfg.lineWidth;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // 3 ondas
-    for (const w of cfg.waves) drawWave(w, time, width, height);
+    for (const line of cfg.lines) drawLine(line, t, w, h);
 
-    rafId = requestAnimationFrame(frame);
+    requestAnimationFrame(frame);
   }
 
-  // init
   resize();
   window.addEventListener("resize", resize, { passive: true });
-
-  rafId = requestAnimationFrame(frame);
+  requestAnimationFrame(frame);
 })();
