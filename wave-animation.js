@@ -1,93 +1,184 @@
+
 (() => {
   const canvas = document.getElementById("waves");
-  if (!canvas) { console.error("[Waves] canvas #waves not found"); return; }
-  const ctx = canvas.getContext("2d");
+  if (!canvas) return;
 
-  const cfg = {
-    stroke: "#ff3b1a",
-    lineWidth: 1.15,
-    stepPx: 2,
+  // Evita doble init en Webflow
+  if (canvas.dataset.init === "1") return;
+  canvas.dataset.init = "1";
 
-    centerY: 0.52,      // carril donde viven
-    microOffsetPx: 6,   // muy juntitas (evita que se pisen siempre)
+  const ctx = canvas.getContext("2d", { alpha: true });
 
-    // Ondas “abiertas”
-    baseFreq: 0.85,     // más bajo = más abiertas
-    // Más lento
-    baseSpeed: 0.22,    // 🔥 baja mucho la velocidad
-
-    // Amplitud grande + respiración global (suave pero visible)
-    ampBase: 0.14,      // amplitud base (relativa a altura)
-    breatheSpeed: 0.35, // lento
-    breatheAmount: 0.60 // cuánto sube/baja (0..1)
+  // ====== Ajustes (tócalos si quieres) ======
+  const SETTINGS = {
+    lines: 3,
+    // Ondulación base (muy sutil)
+    baseAmp: 6,           // px
+    baseSpeed: 0.35,      // movimiento global
+    baseFreq: 0.010,      // frecuencia de onda (más bajo = ondas más largas)
+    // Cuando el cursor pasa cerca (amplificación fuerte)
+    hoverAmp: 75,         // px extra (esto hace la onda "pronunciada")
+    hoverRadius: 180,     // px de influencia del cursor
+    hoverSmooth: 0.10,    // suavizado de la energía
+    // Propagación entre líneas (concepto comunidad)
+    coupling: 0.28,       // 0..1
+    // Render
+    samples: 220,         // puntos por línea (más = más suave, más CPU)
+    lineWidth: 2,
+    // Estética
+    color: "rgba(255,255,255,0.85)",
+    bg: "transparent",
+    // Motion
+    breatheAmp: 0.35,     // "respiración" lenta de amplitud
   };
 
-  // Fases distintas => se cruzan (porque comparten freq)
-  const lines = [
-    { phase: 0.0,  alpha: 0.95, mo: -1, ampMul: 1.05, speedMul: 1.00 },
-    { phase: 2.1,  alpha: 0.80, mo:  0, ampMul: 0.85, speedMul: 0.86 },
-    { phase: 4.2,  alpha: 0.70, mo:  1, ampMul: 1.15, speedMul: 0.72 }
-  ];
-
-  let t0 = performance.now();
-
+  // ====== Helpers ======
   function resize() {
-    const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
-    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(1, rect.width);
+    const h = Math.max(1, rect.height);
+
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function drawLine(line, t, w, h) {
-    const yBase = h * cfg.centerY + line.mo * cfg.microOffsetPx;
+  function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+  function lerp(a,b,t){ return a + (b-a)*t; }
 
-    // amplitud base en px
-    const A0 = h * cfg.ampBase * line.ampMul;
+  // Cursor state (en coords del canvas)
+  let pointer = { x: 0, y: 0, inside: false };
+  canvas.addEventListener("mousemove", (e) => {
+    const r = canvas.getBoundingClientRect();
+    pointer.x = e.clientX - r.left;
+    pointer.y = e.clientY - r.top;
+    pointer.inside = true;
+  }, { passive: true });
 
-    // “respiración” global (crece/decrece) — limpia (solo seno)
-    const breathe = 1 + Math.sin(t * cfg.breatheSpeed + line.phase) * cfg.breatheAmount;
-    const A = A0 * breathe;
+  canvas.addEventListener("mouseleave", () => {
+    pointer.inside = false;
+  }, { passive: true });
 
-    // misma frecuencia base para todas => cruces
-    const k = (Math.PI * 2 * cfg.baseFreq) / w;
+  window.addEventListener("resize", resize, { passive: true });
+  resize();
 
-    const speed = cfg.baseSpeed * line.speedMul;
+  // Energía por línea (se acopla entre ellas)
+  const energy = new Array(SETTINGS.lines).fill(0); // 0..1
+  const energyVel = new Array(SETTINGS.lines).fill(0);
 
-    ctx.globalAlpha = line.alpha;
-    ctx.beginPath();
+  // Fase independiente por línea (para que no sean clones)
+  const phase = Array.from({ length: SETTINGS.lines }, (_, i) => Math.random() * Math.PI * 2 + i * 0.8);
+  const freqJitter = Array.from({ length: SETTINGS.lines }, (_, i) => 0.85 + Math.random() * 0.4);
 
-    for (let x = -30; x <= w + 30; x += cfg.stepPx) {
-      // SOLO una senoide = onda limpia
-      const y = yBase + Math.sin(x * k + t * speed + line.phase) * A;
-      if (x === -30) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-
-    ctx.stroke();
-  }
+  let t0 = performance.now();
 
   function frame(now) {
+    const dt = Math.min(0.033, (now - t0) / 1000);
+    t0 = now;
+
     const rect = canvas.getBoundingClientRect();
-    const w = rect.width, h = rect.height;
-    if (w < 2 || h < 2) { requestAnimationFrame(frame); return; }
+    const W = Math.max(1, rect.width);
+    const H = Math.max(1, rect.height);
 
-    const t = (now - t0) / 1000;
+    // Background
+    if (SETTINGS.bg !== "transparent") {
+      ctx.fillStyle = SETTINGS.bg;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.clearRect(0, 0, W, H);
+    }
 
-    ctx.clearRect(0, 0, w, h);
-    ctx.strokeStyle = cfg.stroke;
-    ctx.lineWidth = cfg.lineWidth;
+    // Posiciones verticales de las 3 líneas
+    const topPad = H * 0.28;
+    const gap = (H - topPad * 2) / (SETTINGS.lines - 1 || 1);
+
+    // Cursor influence → targetEnergy por línea (según distancia a esa línea)
+    const target = new Array(SETTINGS.lines).fill(0);
+
+    for (let i = 0; i < SETTINGS.lines; i++) {
+      const yLine = topPad + gap * i;
+      if (!pointer.inside) { target[i] = 0; continue; }
+
+      const dy = Math.abs(pointer.y - yLine);
+      const dx = Math.abs(pointer.x - W * 0.5);
+
+      // Distancia ponderada: queremos que influya por cercanía vertical
+      const dist = Math.sqrt(dy * dy + (dx * 0.35) * (dx * 0.35));
+      const n = 1 - Math.min(1, dist / SETTINGS.hoverRadius);
+      // curva suave (más "premium" que lineal)
+      target[i] = n * n;
+    }
+
+    // Suavizado + coupling (propagación entre líneas)
+    for (let i = 0; i < SETTINGS.lines; i++) {
+      // coupling simple con vecinos
+      const left = i > 0 ? energy[i - 1] : energy[i];
+      const right = i < SETTINGS.lines - 1 ? energy[i + 1] : energy[i];
+      const neighborMean = (left + right) * 0.5;
+
+      const coupledTarget = lerp(target[i], neighborMean, SETTINGS.coupling);
+      // spring suave para que "entre" y "salga" bonito
+      const accel = (coupledTarget - energy[i]) * 8.0;
+      energyVel[i] += accel * dt;
+      energyVel[i] *= 0.86; // damping
+      energy[i] += energyVel[i];
+
+      // clamp
+      energy[i] = clamp01(energy[i]);
+    }
+
+    // Dibujo
+    ctx.strokeStyle = SETTINGS.color;
+    ctx.lineWidth = SETTINGS.lineWidth;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    drawLine(lines[0], t, w, h);
-    drawLine(lines[1], t, w, h);
-    drawLine(lines[2], t, w, h);
+    // respiración global
+    const breathe = 0.65 + 0.35 * Math.sin(now * 0.00055);
+
+    for (let i = 0; i < SETTINGS.lines; i++) {
+      const yLine = topPad + gap * i;
+
+      // amplitud base + amplificación por energía (fuerte)
+      const amp = SETTINGS.baseAmp * (1 + SETTINGS.breatheAmp * breathe) + SETTINGS.hoverAmp * energy[i];
+
+      // frecuencia: base con jitter por línea
+      const freq = SETTINGS.baseFreq * freqJitter[i];
+
+      // velocidad/fase
+      phase[i] += dt * SETTINGS.baseSpeed * (1.0 + energy[i] * 0.9);
+
+      ctx.beginPath();
+
+      for (let s = 0; s <= SETTINGS.samples; s++) {
+        const x = (s / SETTINGS.samples) * W;
+
+        // Modulación extra localizada cerca del cursor (onda se “levanta” donde pasas)
+        let localBoost = 1;
+        if (pointer.inside) {
+          const d = Math.abs(x - pointer.x);
+          const m = 1 - Math.min(1, d / (SETTINGS.hoverRadius * 1.15));
+          localBoost = 1 + 0.9 * (m * m) * energy[i];
+        }
+
+        // Onda principal (limpia)
+        const y =
+          yLine +
+          Math.sin(x * freq + phase[i]) * amp * localBoost;
+
+        if (s === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+
+      ctx.stroke();
+    }
 
     requestAnimationFrame(frame);
   }
 
-  resize();
-  window.addEventListener("resize", resize, { passive: true });
   requestAnimationFrame(frame);
 })();
+
